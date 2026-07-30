@@ -29,7 +29,7 @@ class TrackAdapter(
 
     fun updateTracks(newItems: List<Track>) {
         if (isQueue) {
-            items = newItems
+            items = newItems.toList()
             notifyDataSetChanged()
             return
         }
@@ -48,6 +48,17 @@ class TrackAdapter(
         selectedIndex = index
         if (old in items.indices) notifyItemChanged(old)
         if (index in items.indices) notifyItemChanged(index)
+    }
+
+    fun moveItem(from: Int, to: Int): Boolean {
+        if (!isQueue) return false
+        if (from !in items.indices || to !in items.indices || from == to) return false
+        val mutable = items.toMutableList()
+        val moved = mutable.removeAt(from)
+        mutable.add(to, moved)
+        items = mutable
+        notifyItemMoved(from, to)
+        return true
     }
 
     inner class VH(view: View) : RecyclerView.ViewHolder(view) {

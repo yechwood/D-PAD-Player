@@ -39,6 +39,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.collection.LruCache
 
 class PlaybackService : Service() {
 
@@ -51,9 +52,11 @@ class PlaybackService : Service() {
         const val COMMAND_SEEK_BWD    = "com.example.dpadplayer.action.SEEK_BWD"
         const val COMMAND_SEEK_TO     = "com.example.dpadplayer.action.SEEK_TO"
         const val COMMAND_PLAY_INDEX  = "com.example.dpadplayer.action.PLAY_INDEX"
+        const val COMMAND_PLAY_TRACK_ID = "com.example.dpadplayer.action.PLAY_TRACK_ID"
         const val COMMAND_STOP        = "com.example.dpadplayer.action.STOP"
         const val EXTRA_INDEX         = "index"
         const val EXTRA_POSITION      = "position"
+        const val EXTRA_TRACK_ID      = "track_id"
 
         const val REPEAT_OFF = 0
         const val REPEAT_ALL = 1
@@ -101,6 +104,10 @@ class PlaybackService : Service() {
     private var lastNotificationProgressUpdateAt = 0L
     private var cachedArtUri: String? = null
     private var cachedArtBitmap: Bitmap? = null
+    private val albumArtCache = LruCache<String, Bitmap>(16)
+    private var sleepTimerRunnable: Runnable? = null
+    private var sleepTimerEndAtMs: Long = -1L
+    private var lastSleepRemainingBucket: Long = Long.MIN_VALUE
 
     val tracks = mutableListOf<Track>()
     var currentIndex = 0
@@ -120,12 +127,14 @@ class PlaybackService : Service() {
     var onShuffleChanged: ((Boolean) -> Unit)? = null
     var onRepeatChanged: ((Int) -> Unit)? = null
     var onQueueChanged: ((List<Track>) -> Unit)? = null
+    var onSleepTimerChanged: ((Long) -> Unit)? = null
 
     // Seek-bar position polling
     private val mainHandler = Handler(Looper.getMainLooper())
     private val positionRunnable: Runnable = object : Runnable {
         override fun run() {
             onPositionChanged?.invoke(player.currentPosition)
+            emitSleepTimerRemainingIfNeeded()
             val now = SystemClock.elapsedRealtime()
             if (player.isPlaying && now - lastNotificationProgressUpdateAt >= NOTIFICATION_PROGRESS_UPDATE_MS) {
                 lastNotificationProgressUpdateAt = now
@@ -222,6 +231,10 @@ class PlaybackService : Service() {
                 val idx = intent.getIntExtra(EXTRA_INDEX, 0)
                 prepareAndPlay(idx)
             }
+            COMMAND_PLAY_TRACK_ID -> {
+                val trackId = intent.getLongExtra(EXTRA_TRACK_ID, -1L)
+                if (trackId > 0L) playTrackById(trackId)
+            }
         }
         return START_STICKY
     }
@@ -253,6 +266,8 @@ class PlaybackService : Service() {
         batchEnrichmentJob?.cancel()
         cachedArtBitmap = null
         cachedArtUri = null
+        albumArtCache.evictAll()
+        cancelSleepTimer()
         // Cancel background work
         serviceScope.cancel()
         abandonAudioFocus()
@@ -305,7 +320,26 @@ class PlaybackService : Service() {
         updateMetadata(index)
         updatePlaybackState()
         onTrackChanged?.invoke(index)
+        recordPlayStat(tracks[index].id)
         isTransitioning = false
+    }
+
+    private fun playTrackById(trackId: Long) {
+        val existingIndex = tracks.indexOfFirst { it.id == trackId }
+        if (existingIndex >= 0) {
+            prepareAndPlay(existingIndex)
+            return
+        }
+        serviceScope.launch {
+            val loaded = withContext(Dispatchers.IO) { MediaStoreScanner.loadTracks(applicationContext, "title") }
+            val idx = loaded.indexOfFirst { it.id == trackId }
+            if (idx < 0) return@launch
+            tracks.clear()
+            tracks.addAll(loaded)
+            prepareAndPlay(idx)
+            notifyQueueChanged()
+            restartBatchEnrichment()
+        }
     }
 
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focus ->
@@ -563,6 +597,7 @@ class PlaybackService : Service() {
         batchEnrichmentJob?.cancel()
         cachedArtBitmap = null
         cachedArtUri = null
+        albumArtCache.evictAll()
         abandonAudioFocus()
         if (removeNotification) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -575,6 +610,45 @@ class PlaybackService : Service() {
     val isPlaying get() = player.isPlaying
     val currentPosition get() = player.currentPosition
     val duration get() = if (currentIndex in tracks.indices) tracks[currentIndex].duration else 0L
+    val audioSessionId get() = player.audioSessionId
+
+    fun setPlaybackSpeed(speed: Float) {
+        val value = speed.coerceIn(0.5f, 2.0f)
+        player.setPlaybackSpeed(value)
+        updatePlaybackState()
+    }
+
+    fun getPlaybackSpeed(): Float = player.playbackParameters.speed
+
+    fun startSleepTimer(durationMs: Long) {
+        cancelSleepTimer()
+        if (durationMs <= 0L) return
+        sleepTimerEndAtMs = SystemClock.elapsedRealtime() + durationMs
+        lastSleepRemainingBucket = Long.MIN_VALUE
+        onSleepTimerChanged?.invoke(durationMs)
+        sleepTimerRunnable = Runnable {
+            pausePlayback()
+            sleepTimerEndAtMs = -1L
+            lastSleepRemainingBucket = Long.MIN_VALUE
+            onSleepTimerChanged?.invoke(-1L)
+            requestServiceStop(removeNotification = true)
+        }.also { runnable ->
+            mainHandler.postDelayed(runnable, durationMs)
+        }
+    }
+
+    fun cancelSleepTimer() {
+        sleepTimerRunnable?.let { mainHandler.removeCallbacks(it) }
+        sleepTimerRunnable = null
+        sleepTimerEndAtMs = -1L
+        lastSleepRemainingBucket = Long.MIN_VALUE
+        onSleepTimerChanged?.invoke(-1L)
+    }
+
+    fun sleepTimerRemainingMs(): Long {
+        if (sleepTimerEndAtMs <= 0L) return -1L
+        return (sleepTimerEndAtMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+    }
 
     // ─── MediaSession state ───────────────────────────────────────────────────
 
@@ -618,6 +692,7 @@ class PlaybackService : Service() {
     private fun loadAlbumArtBitmap(uri: Uri?): Bitmap? {
         if (uri == null || uri == Uri.EMPTY) return null
         val key = uri.toString()
+        albumArtCache.get(key)?.let { return it }
         if (cachedArtUri == key && cachedArtBitmap != null) {
             return cachedArtBitmap
         }
@@ -626,6 +701,7 @@ class PlaybackService : Service() {
                 BitmapFactory.decodeStream(stream)?.also { decoded ->
                     cachedArtUri = key
                     cachedArtBitmap = decoded
+                    albumArtCache.put(key, decoded)
                 }
             }
         } catch (_: Exception) {
@@ -635,6 +711,26 @@ class PlaybackService : Service() {
             }
             null
         }
+    }
+
+    fun moveQueueItem(from: Int, to: Int): Boolean {
+        if (from !in tracks.indices || to !in tracks.indices || from == to) return false
+        val moved = tracks.removeAt(from)
+        tracks.add(to, moved)
+
+        currentIndex = when {
+            currentIndex == from -> to
+            from < currentIndex && to >= currentIndex -> currentIndex - 1
+            from > currentIndex && to <= currentIndex -> currentIndex + 1
+            else -> currentIndex
+        }
+
+        if (shuffleOn) {
+            buildShuffleOrder()
+        }
+        onTrackChanged?.invoke(currentIndex)
+        notifyQueueChanged()
+        return true
     }
 
     // ─── Notification ─────────────────────────────────────────────────────────
@@ -782,6 +878,24 @@ class PlaybackService : Service() {
     private fun updateNotification() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIF_ID, buildNotification())
+    }
+
+    private fun recordPlayStat(trackId: Long) {
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                val db = com.example.dpadplayer.db.AppDatabase.getInstance(applicationContext)
+                db.playStatsDao().recordPlay(trackId, System.currentTimeMillis())
+            } catch (_: Exception) { }
+        }
+    }
+
+    private fun emitSleepTimerRemainingIfNeeded() {
+        val remaining = sleepTimerRemainingMs()
+        val bucket = if (remaining < 0L) -1L else (remaining / 1000L)
+        if (bucket != lastSleepRemainingBucket) {
+            lastSleepRemainingBucket = bucket
+            onSleepTimerChanged?.invoke(remaining)
+        }
     }
 
     // ─── Position polling ─────────────────────────────────────────────────────

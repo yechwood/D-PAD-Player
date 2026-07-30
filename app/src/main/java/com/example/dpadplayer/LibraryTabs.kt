@@ -14,8 +14,6 @@ import androidx.fragment.app.activityViewModels
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.adapter.FragmentStateAdapter
 import java.io.File
-import com.example.dpadplayer.MusicLibrary
-import com.example.dpadplayer.playback.Track
 
 
 // ── Songs tab ────────────────────────────────────────────────────────────────
@@ -35,7 +33,10 @@ class SongsTabFragment : Fragment(), TabWithRecycler {
         adapter = TrackAdapter(
             items = emptyList(),
             onTrackClick = { index -> 
-                val tracks = viewModel.tracks.value ?: emptyList()
+                val tracks = MusicViewModel.filterTracks(
+                    viewModel.tracks.value ?: emptyList(),
+                    viewModel.searchQuery.value.orEmpty()
+                )
                 if (tracks.isNotEmpty()) {
                     (activity as? MainActivity)?.playTracks(tracks, index)
                 }
@@ -52,7 +53,15 @@ class SongsTabFragment : Fragment(), TabWithRecycler {
         }
         recycler.layoutManager = lm
 
-        viewModel.tracks.observe(viewLifecycleOwner) { adapter.updateTracks(it) }
+        fun refreshTracks() {
+            val filtered = MusicViewModel.filterTracks(
+                viewModel.tracks.value ?: emptyList(),
+                viewModel.searchQuery.value.orEmpty()
+            )
+            adapter.updateTracks(filtered)
+        }
+        viewModel.tracks.observe(viewLifecycleOwner) { refreshTracks() }
+        viewModel.searchQuery.observe(viewLifecycleOwner) { refreshTracks() }
         viewModel.currentIndex.observe(viewLifecycleOwner) { adapter.setSelectedIndex(it) }
     }
 
@@ -100,7 +109,15 @@ class AlbumsTabFragment : Fragment(), TabWithRecycler {
             viewModel.setLibraryTabFocusPosition(1, it)
         }
         recycler.layoutManager = lm
-        viewModel.albums.observe(viewLifecycleOwner) { adapter.update(it) }
+        fun refreshAlbums() {
+            val filtered = MusicViewModel.filterAlbums(
+                viewModel.albums.value ?: emptyList(),
+                viewModel.searchQuery.value.orEmpty()
+            )
+            adapter.update(filtered)
+        }
+        viewModel.albums.observe(viewLifecycleOwner) { refreshAlbums() }
+        viewModel.searchQuery.observe(viewLifecycleOwner) { refreshAlbums() }
     }
 
     override fun recyclerView(): RecyclerView? = recyclerRef
@@ -140,7 +157,15 @@ class ArtistsTabFragment : Fragment(), TabWithRecycler {
             viewModel.setLibraryTabFocusPosition(2, it)
         }
         recycler.layoutManager = lm
-        viewModel.artists.observe(viewLifecycleOwner) { adapter.update(it) }
+        fun refreshArtists() {
+            val filtered = MusicViewModel.filterArtists(
+                viewModel.artists.value ?: emptyList(),
+                viewModel.searchQuery.value.orEmpty()
+            )
+            adapter.update(filtered)
+        }
+        viewModel.artists.observe(viewLifecycleOwner) { refreshArtists() }
+        viewModel.searchQuery.observe(viewLifecycleOwner) { refreshArtists() }
     }
 
     override fun recyclerView(): RecyclerView? = recyclerRef
@@ -180,7 +205,15 @@ class GenresTabFragment : Fragment(), TabWithRecycler {
             viewModel.setLibraryTabFocusPosition(3, it)
         }
         recycler.layoutManager = lm
-        viewModel.genres.observe(viewLifecycleOwner) { adapter.update(it) }
+        fun refreshGenres() {
+            val filtered = MusicViewModel.filterGenres(
+                viewModel.genres.value ?: emptyList(),
+                viewModel.searchQuery.value.orEmpty()
+            )
+            adapter.update(filtered)
+        }
+        viewModel.genres.observe(viewLifecycleOwner) { refreshGenres() }
+        viewModel.searchQuery.observe(viewLifecycleOwner) { refreshGenres() }
     }
 
     override fun recyclerView(): RecyclerView? = recyclerRef
@@ -242,7 +275,15 @@ class PlaylistsTabFragment : Fragment(), TabWithRecycler {
             viewModel.setLibraryTabFocusPosition(4, it)
         }
         recycler.layoutManager = lm
-        viewModel.playlists.observe(viewLifecycleOwner) { adapter.update(it) }
+        fun refreshPlaylists() {
+            val filtered = MusicViewModel.filterPlaylists(
+                viewModel.playlists.value ?: emptyList(),
+                viewModel.searchQuery.value.orEmpty()
+            )
+            adapter.update(filtered)
+        }
+        viewModel.playlists.observe(viewLifecycleOwner) { refreshPlaylists() }
+        viewModel.searchQuery.observe(viewLifecycleOwner) { refreshPlaylists() }
     }
 
     private fun showCreatePlaylistDialog() {
@@ -273,10 +314,108 @@ class PlaylistsTabFragment : Fragment(), TabWithRecycler {
     }
 }
 
+class RecentlyPlayedTabFragment : Fragment(), TabWithRecycler {
+    private val viewModel: MusicViewModel by activityViewModels()
+    private var recyclerRef: RecyclerView? = null
+    private var lastFocusedPos = 0
+
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View =
+        inflater.inflate(R.layout.fragment_tab_list, container, false)
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        val recycler = view.findViewById<RecyclerView>(R.id.recycler)
+        recyclerRef = recycler
+        lastFocusedPos = viewModel.getLibraryTabFocusPosition(6)
+
+        val adapter = TrackAdapter(
+            items = emptyList(),
+            onTrackClick = { index ->
+                val tracks = viewModel.recentlyPlayed.value ?: emptyList()
+                if (tracks.isNotEmpty()) {
+                    (activity as? MainActivity)?.playTracks(tracks, index)
+                }
+            }
+        )
+        adapter.menuClickListener = { anchor, track, _ ->
+            (activity as? MainActivity)?.showTrackMenu(anchor, track)
+        }
+        recycler.adapter = adapter
+        val lm = FocusLinearLayoutManager(requireContext())
+        lm.onFocusPosition = {
+            lastFocusedPos = it
+            viewModel.setLibraryTabFocusPosition(6, it)
+        }
+        recycler.layoutManager = lm
+
+        viewModel.recentlyPlayed.observe(viewLifecycleOwner) { adapter.updateTracks(it) }
+    }
+
+    override fun recyclerView(): RecyclerView? = recyclerRef
+
+    override fun requestInitialFocus() {
+        recyclerRef?.post {
+            val lm = recyclerRef?.layoutManager
+            val target = try { lm?.findViewByPosition(lastFocusedPos) } catch (_: Exception) { null }
+            val child = (target ?: recyclerRef?.getChildAt(0))
+            val clickable = child?.findViewById<View?>(R.id.clickable_item) ?: child
+            clickable?.requestFocus()
+        }
+    }
+}
+
+class MostPlayedTabFragment : Fragment(), TabWithRecycler {
+    private val viewModel: MusicViewModel by activityViewModels()
+    private var recyclerRef: RecyclerView? = null
+    private var lastFocusedPos = 0
+
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View =
+        inflater.inflate(R.layout.fragment_tab_list, container, false)
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        val recycler = view.findViewById<RecyclerView>(R.id.recycler)
+        recyclerRef = recycler
+        lastFocusedPos = viewModel.getLibraryTabFocusPosition(7)
+
+        val adapter = TrackAdapter(
+            items = emptyList(),
+            onTrackClick = { index ->
+                val tracks = viewModel.mostPlayed.value ?: emptyList()
+                if (tracks.isNotEmpty()) {
+                    (activity as? MainActivity)?.playTracks(tracks, index)
+                }
+            }
+        )
+        adapter.menuClickListener = { anchor, track, _ ->
+            (activity as? MainActivity)?.showTrackMenu(anchor, track)
+        }
+        recycler.adapter = adapter
+        val lm = FocusLinearLayoutManager(requireContext())
+        lm.onFocusPosition = {
+            lastFocusedPos = it
+            viewModel.setLibraryTabFocusPosition(7, it)
+        }
+        recycler.layoutManager = lm
+
+        viewModel.mostPlayed.observe(viewLifecycleOwner) { adapter.updateTracks(it) }
+    }
+
+    override fun recyclerView(): RecyclerView? = recyclerRef
+
+    override fun requestInitialFocus() {
+        recyclerRef?.post {
+            val lm = recyclerRef?.layoutManager
+            val target = try { lm?.findViewByPosition(lastFocusedPos) } catch (_: Exception) { null }
+            val child = (target ?: recyclerRef?.getChildAt(0))
+            val clickable = child?.findViewById<View?>(R.id.clickable_item) ?: child
+            clickable?.requestFocus()
+        }
+    }
+}
+
 // ── ViewPager2 adapter ────────────────────────────────────────────────────────
 
 class LibraryPagerAdapter(fragment: Fragment) : FragmentStateAdapter(fragment) {
-    override fun getItemCount() = 6
+    override fun getItemCount() = 8
     override fun createFragment(position: Int): Fragment = when (position) {
         0 -> SongsTabFragment()
         1 -> AlbumsTabFragment()
@@ -284,6 +423,8 @@ class LibraryPagerAdapter(fragment: Fragment) : FragmentStateAdapter(fragment) {
         3 -> GenresTabFragment()
         4 -> PlaylistsTabFragment()
         5 -> FoldersTabFragment()
+        6 -> RecentlyPlayedTabFragment()
+        7 -> MostPlayedTabFragment()
         else -> SongsTabFragment()
     }
 }
@@ -313,16 +454,19 @@ class FoldersTabFragment : Fragment(), TabWithRecycler {
         }
         recycler.layoutManager = lm
 
-        // Build folder list from tracks when tracks change
-        viewModel.tracks.observe(viewLifecycleOwner) { tracks ->
+        fun refreshFolders() {
+            val tracks = viewModel.tracks.value ?: emptyList()
             val dirs = tracks.mapNotNull { it.filePath.takeIf { p -> p.isNotBlank() } }
                 .map { File(it).parent ?: it }
                 .distinct()
                 .sorted()
+            val filtered = MusicViewModel.filterFolders(dirs, viewModel.searchQuery.value.orEmpty())
             folders.clear()
-            folders.addAll(dirs)
+            folders.addAll(filtered)
             (recycler.adapter as? FolderAdapter)?.update(folders)
         }
+        viewModel.tracks.observe(viewLifecycleOwner) { refreshFolders() }
+        viewModel.searchQuery.observe(viewLifecycleOwner) { refreshFolders() }
     }
 
     override fun recyclerView(): RecyclerView? = recyclerRef

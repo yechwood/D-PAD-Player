@@ -9,9 +9,11 @@ import androidx.lifecycle.viewModelScope
 import com.example.dpadplayer.db.AppDatabase
 import com.example.dpadplayer.db.PlaylistEntity
 import com.example.dpadplayer.db.PlaylistSongEntity
+import com.example.dpadplayer.db.PlayStatEntity
 import com.example.dpadplayer.playback.Track
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -20,7 +22,7 @@ import kotlinx.coroutines.launch
 class MusicViewModel(app: Application) : AndroidViewModel(app) {
     var activeLibraryTab = -1
     var homeMenuFocusPos = 0
-    private val libraryTabFocusPositions = IntArray(6) { -1 }
+    private val libraryTabFocusPositions = IntArray(8) { -1 }
 
     fun getLibraryTabFocusPosition(tab: Int): Int =
         libraryTabFocusPositions.getOrElse(tab) { -1 }
@@ -54,6 +56,12 @@ class MusicViewModel(app: Application) : AndroidViewModel(app) {
     private val _queue = MutableLiveData<List<Track>>(emptyList())
     val queue: LiveData<List<Track>> = _queue
 
+    private val _sleepTimerRemainingMs = MutableLiveData<Long>(-1L)
+    val sleepTimerRemainingMs: LiveData<Long> = _sleepTimerRemainingMs
+
+    private val _searchQuery = MutableLiveData<String>("")
+    val searchQuery: LiveData<String> = _searchQuery
+
     // ── Library (albums / artists / genres) ───────────────────────────────────
 
     private val _library = MutableLiveData<MusicLibrary.Library>(
@@ -68,6 +76,12 @@ class MusicViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _genres  = MutableLiveData<List<Genre>>(emptyList())
     val genres:  LiveData<List<Genre>>  = _genres
+
+    private val _recentlyPlayed = MutableLiveData<List<Track>>(emptyList())
+    val recentlyPlayed: LiveData<List<Track>> = _recentlyPlayed
+
+    private val _mostPlayed = MutableLiveData<List<Track>>(emptyList())
+    val mostPlayed: LiveData<List<Track>> = _mostPlayed
 
     // ── Playlists (Room) ──────────────────────────────────────────────────────
 
@@ -90,9 +104,10 @@ class MusicViewModel(app: Application) : AndroidViewModel(app) {
                 val db = com.example.dpadplayer.db.AppDatabase.getInstance(getApplication())
                 val caches = db.albumCacheDao().getAll()
                 if (caches.isNotEmpty()) {
+                    val cacheByAlbumId = caches.associateBy { it.albumId }
                     val albums = lib.albums.map { album ->
                         val anyId = album.songs.firstOrNull()?.albumId ?: 0L
-                        val c = caches.firstOrNull { it.albumId == anyId }
+                        val c = cacheByAlbumId[anyId]
                         if (c != null && c.artPath.isNotBlank()) {
                             album.copy(albumArtUri = android.net.Uri.fromFile(java.io.File(c.artPath)))
                         } else album
@@ -105,6 +120,7 @@ class MusicViewModel(app: Application) : AndroidViewModel(app) {
             _albums.postValue(merged.albums)
             _artists.postValue(merged.artists)
             _genres.postValue(merged.genres)
+            publishSmartPlaylists(result)
 
             // Background enrichment: lazily extract real ID3 tags + artwork for all tracks.
             // Already-enriched tracks (read from cache) are skipped automatically.
@@ -158,23 +174,83 @@ class MusicViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
+        viewModelScope.launch(Dispatchers.IO) {
+            db.playStatsDao().observeAll().collectLatest { stats ->
+                val currentTracks = _tracks.value ?: emptyList()
+                publishSmartPlaylistsFromStats(stats, currentTracks)
+            }
+        }
+
         // Separate collector for metadata events so both flows are observed concurrently
         viewModelScope.launch(Dispatchers.Main) {
-            ArtRepository.metaEvents.collect { ev ->
-                val currentTracks = _tracks.value ?: return@collect
-                // Replace track in tracks list if present
-                val updated = currentTracks.map { if (it.id == ev.trackId) ev.enriched else it }
-                if (updated != currentTracks) {
-                    // Rebuild library from updated tracks (small and targeted)
+            val pending = LinkedHashMap<Long, Track>()
+            var flushJob: Job? = null
+
+            fun flushPending() {
+                val currentTracks = _tracks.value ?: return
+                if (pending.isEmpty()) return
+                val updates = pending.values.toList()
+                pending.clear()
+                val updateMap = updates.associateBy { it.id }
+                var changed = false
+                val updated = currentTracks.map { old ->
+                    val replacement = updateMap[old.id] ?: return@map old
+                    if (replacement != old) {
+                        changed = true
+                        replacement
+                    } else old
+                }
+                if (changed) {
                     val lib = MusicLibrary.build(updated)
                     _tracks.postValue(updated)
                     _library.postValue(lib)
                     _albums.postValue(lib.albums)
                     _artists.postValue(lib.artists)
                     _genres.postValue(lib.genres)
+                    publishSmartPlaylists(updated)
+                }
+            }
+
+            ArtRepository.metaEvents.collect { ev ->
+                pending[ev.trackId] = ev.enriched
+                if (flushJob == null || flushJob?.isCompleted == true) {
+                    flushJob = launch(Dispatchers.Main) {
+                        delay(300)
+                        flushPending()
+                    }
                 }
             }
         }
+    }
+
+    fun setSearchQuery(query: String) {
+        _searchQuery.value = query.trim()
+    }
+
+    private fun publishSmartPlaylists(tracks: List<Track>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val stats = db.playStatsDao().getAll()
+                publishSmartPlaylistsFromStats(stats, tracks)
+            } catch (_: Exception) {
+                _recentlyPlayed.postValue(emptyList())
+                _mostPlayed.postValue(emptyList())
+            }
+        }
+    }
+
+    private fun publishSmartPlaylistsFromStats(stats: List<PlayStatEntity>, tracks: List<Track>) {
+        val trackMap = tracks.associateBy { it.id }
+        val recent = stats
+            .sortedByDescending { it.lastPlayedAt }
+            .mapNotNull { trackMap[it.trackId] }
+            .take(100)
+        val most = stats
+            .sortedByDescending { it.playCount }
+            .mapNotNull { trackMap[it.trackId] }
+            .take(100)
+        _recentlyPlayed.postValue(recent)
+        _mostPlayed.postValue(most)
     }
 
     // ── Playlist operations ───────────────────────────────────────────────────
@@ -264,10 +340,70 @@ class MusicViewModel(app: Application) : AndroidViewModel(app) {
     fun setRepeatMode(mode: Int)     { _repeatMode.value = mode }
     fun setShuffleOn(on: Boolean)    { _shuffleOn.value = on }
     fun setQueue(q: List<Track>)     { _queue.value = q }
+    fun setSleepTimerRemainingMs(remainingMs: Long) { _sleepTimerRemainingMs.value = remainingMs }
 
     companion object {
         const val REPEAT_OFF = 0
         const val REPEAT_ALL = 1
         const val REPEAT_ONE = 2
+
+        fun filterTracks(tracks: List<Track>, query: String): List<Track> {
+            val q = query.normalizedQuery()
+            if (q.isEmpty()) return tracks
+            return tracks.filter { t ->
+                t.title.normalizedContains(q) ||
+                    t.artist.normalizedContains(q) ||
+                    t.album.normalizedContains(q) ||
+                    t.genre.normalizedContains(q) ||
+                    t.filePath.normalizedContains(q)
+            }
+        }
+
+        fun filterAlbums(albums: List<Album>, query: String): List<Album> {
+            val q = query.normalizedQuery()
+            if (q.isEmpty()) return albums
+            return albums.filter { a ->
+                a.name.normalizedContains(q) ||
+                    a.artist.normalizedContains(q) ||
+                    a.year.toString().normalizedContains(q) ||
+                    a.songs.any { s ->
+                        s.title.normalizedContains(q) || s.artist.normalizedContains(q)
+                    }
+            }
+        }
+
+        fun filterArtists(artists: List<Artist>, query: String): List<Artist> {
+            val q = query.normalizedQuery()
+            if (q.isEmpty()) return artists
+            return artists.filter { a ->
+                a.name.normalizedContains(q) ||
+                    a.albums.any { it.name.normalizedContains(q) } ||
+                    a.songs.any { it.title.normalizedContains(q) }
+            }
+        }
+
+        fun filterGenres(genres: List<Genre>, query: String): List<Genre> {
+            val q = query.normalizedQuery()
+            if (q.isEmpty()) return genres
+            return genres.filter { g ->
+                g.name.normalizedContains(q) ||
+                    g.songs.any { it.title.normalizedContains(q) || it.artist.normalizedContains(q) }
+            }
+        }
+
+        fun filterPlaylists(playlists: List<PlaylistEntity>, query: String): List<PlaylistEntity> {
+            val q = query.normalizedQuery()
+            if (q.isEmpty()) return playlists
+            return playlists.filter { it.name.normalizedContains(q) }
+        }
+
+        fun filterFolders(folders: List<String>, query: String): List<String> {
+            val q = query.normalizedQuery()
+            if (q.isEmpty()) return folders
+            return folders.filter { it.normalizedContains(q) }
+        }
+
+        private fun String.normalizedQuery(): String = trim().lowercase()
+        private fun String.normalizedContains(query: String): Boolean = lowercase().contains(query)
     }
 }

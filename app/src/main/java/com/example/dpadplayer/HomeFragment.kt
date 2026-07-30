@@ -90,6 +90,7 @@ class HomeFragment : Fragment() {
         applyMiniPlayerFocusBackground(miniOpenPlayer)
         miniOpenPlayer.setOnClickListener { (activity as? MainActivity)?.openPlayer() }
         miniOpenPlayer.setupDpadItem { (activity as? MainActivity)?.openPlayer() }
+
         applyMiniPlayerFocusBackground(miniBtnPlay)
         miniBtnPlay.setupDpadItem(onFocusChanged = materialButtonFocusChangeHandler(miniBtnPlay)) {
             (activity as? MainActivity)?.togglePlayPause()
@@ -153,16 +154,25 @@ class HomeFragment : Fragment() {
 
     private fun refreshMiniPlayer() {
         val activity = activity as? MainActivity ?: return
-        val track = activity.currentTrack() ?: return
+        val track = activity.currentTrack()
+        if (track == null) {
+            miniTitle.text = "No track playing"
+            miniArtist.text = ""
+            miniProgress.max = 1
+            miniProgress.progress = 0
+            miniArt.setImageResource(R.drawable.ic_music_note)
+            return
+        }
         miniTitle.text  = track.title
         miniArtist.text = track.artist
-        miniProgress.max = track.duration.toInt()
+        miniProgress.max = track.duration.coerceAtLeast(1L).toInt()
         Glide.with(this)
             .load(track.albumArtUri)
             .placeholder(R.drawable.ic_music_note)
             .error(R.drawable.ic_music_note)
             .fallback(R.drawable.ic_music_note)
             .into(miniArt)
+        updateProgressBar(viewModel.position.value ?: 0L)
     }
 
     private fun updateMiniPlayIcon(isPlaying: Boolean) {
@@ -171,7 +181,9 @@ class HomeFragment : Fragment() {
     }
 
     private fun updateProgressBar(pos: Long) {
-        miniProgress.progress = pos.toInt()
+        val max = miniProgress.max.coerceAtLeast(1)
+        val clamped = pos.coerceIn(0L, max.toLong())
+        miniProgress.progress = clamped.toInt()
     }
 }
 

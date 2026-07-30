@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.media.audiofx.AudioEffect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -103,6 +104,7 @@ class MainActivity : AppCompatActivity() {
             service?.onShuffleChanged       = null
             service?.onRepeatChanged        = null
             service?.onQueueChanged         = null
+            service?.onSleepTimerChanged    = null
             unbindService(connection)
             bound = false
         }
@@ -278,6 +280,46 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, getString(R.string.msg_added_to_queue, track.title), Toast.LENGTH_SHORT).show()
     }
 
+    fun setPlaybackSpeed(speed: Float) {
+        service?.setPlaybackSpeed(speed)
+    }
+
+    fun playbackSpeed(): Float = service?.getPlaybackSpeed() ?: 1.0f
+
+    fun startSleepTimer(durationMs: Long) {
+        service?.startSleepTimer(durationMs)
+    }
+
+    fun cancelSleepTimer() {
+        service?.cancelSleepTimer()
+    }
+
+    fun sleepTimerRemainingMs(): Long = service?.sleepTimerRemainingMs() ?: -1L
+
+    fun moveQueueItem(from: Int, to: Int): Boolean {
+        return service?.moveQueueItem(from, to) == true
+    }
+
+    fun openEqualizer() {
+        val sessionId = service?.audioSessionId ?: return
+
+        if (sessionId <= 0) {
+            Toast.makeText(this, "Equalizer unavailable right now", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val intent = Intent(AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL).apply {
+            putExtra(AudioEffect.EXTRA_AUDIO_SESSION, sessionId)
+            putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
+            putExtra(AudioEffect.EXTRA_PACKAGE_NAME, packageName)
+        }
+        if (intent.resolveActivity(packageManager) != null) {
+            startActivity(intent)
+        } else {
+            Toast.makeText(this, "No system equalizer found", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun showTrackMenu(anchor: android.view.View, track: Track) {
         val popup = android.widget.PopupMenu(this, anchor)
         popup.menu.add(0, 1, 0, getString(R.string.menu_add_to_playlist))
@@ -384,6 +426,12 @@ class MainActivity : AppCompatActivity() {
                 viewModel.setQueue(q)
             }
         }
+        svc.onSleepTimerChanged = { remaining ->
+            runOnUiThread {
+                viewModel.setSleepTimerRemainingMs(remaining)
+            }
+        }
+        viewModel.setSleepTimerRemainingMs(svc.sleepTimerRemainingMs())
     }
 
     // ── Permissions ────────────────────────────────────────────────────────────

@@ -43,7 +43,16 @@ object MediaStoreScanner {
         val raw = collectRawRows(context)
         // Load track cache to avoid re-enriching files that were previously processed.
         val db = try { AppDatabase.getInstance(context) } catch (_: Exception) { null }
-        val cacheMap = db?.trackCacheDao()?.getAll()?.associateBy { it.sourceUri } ?: emptyMap()
+        val rawUris = raw.map { it.uri.toString() }
+        val cacheRows = if (db != null && rawUris.isNotEmpty()) {
+            val chunkSize = 900
+            rawUris
+                .chunked(chunkSize)
+                .flatMap { chunk -> db.trackCacheDao().getBySourceUris(chunk) }
+        } else {
+            emptyList()
+        }
+        val cacheMap = cacheRows.associateBy { it.sourceUri }
 
         val tracks = raw.map { row ->
             val cached = cacheMap[row.uri.toString()]
@@ -73,7 +82,7 @@ object MediaStoreScanner {
                     mediaStoreAlbumArtUri = Track.albumArtUri(row.msAlbumId),
                 )
             } else {
-                enrichWithRetriever(context, row)
+                enrichWithRetriever(row)
             }
         }
         return applySortOrder(tracks, sortOrder)
@@ -89,6 +98,7 @@ object MediaStoreScanner {
         val msArtist: String,
         val msAlbum: String,
         val msAlbumId: Long,
+        val msTrack: Int,
         val msDuration: Long,
         val msDateAdded: Long,
         val isInternal: Boolean,
@@ -102,6 +112,7 @@ object MediaStoreScanner {
             MediaStore.Audio.AudioColumns.ARTIST,
             MediaStore.Audio.AudioColumns.ALBUM,
             MediaStore.Audio.AudioColumns.ALBUM_ID,
+            MediaStore.Audio.AudioColumns.TRACK,
             MediaStore.Audio.AudioColumns.DURATION,
             MediaStore.Audio.AudioColumns.DATE_ADDED,
             MediaStore.Audio.AudioColumns.IS_MUSIC,
@@ -148,6 +159,7 @@ object MediaStoreScanner {
                     val colArtist   = c.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.ARTIST)
                     val colAlbum    = c.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.ALBUM)
                     val colAlbumId  = c.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.ALBUM_ID)
+                    val colTrack    = c.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.TRACK)
                     val colDur      = c.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.DURATION)
                     val colAdded    = c.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.DATE_ADDED)
 
@@ -163,6 +175,7 @@ object MediaStoreScanner {
                             msArtist    = c.getString(colArtist)  ?: "",
                             msAlbum     = c.getString(colAlbum)   ?: "",
                             msAlbumId   = c.getLong(colAlbumId),
+                            msTrack     = c.getInt(colTrack),
                             msDuration  = c.getLong(colDur),
                             msDateAdded = c.getLong(colAdded),
                             isInternal  = isInternal,
@@ -178,7 +191,7 @@ object MediaStoreScanner {
 
     // ── Step 2: enrich with jaudiotagger (ID3/Vorbis tags) ─────────────────
 
-    private fun enrichWithRetriever(context: Context, row: RawRow): Track {
+    private fun enrichWithRetriever(row: RawRow): Track {
         var title       = row.msTitle.ifBlank { "Unknown" }
         var sortTitle   = title
         var artist      = row.msArtist.ifBlank { "Unknown Artist" }
@@ -187,8 +200,9 @@ object MediaStoreScanner {
         var sortAlbumArtist = artist
         var album       = row.msAlbum.ifBlank { "Unknown Album" }
         var sortAlbum   = album
-        var trackNum    = 0
-        var discNum     = 0
+        val (msDiscNum, msTrackNum) = decodeMediaStoreTrack(row.msTrack)
+        var trackNum    = msTrackNum
+        var discNum     = msDiscNum
         var year        = 0
         var genre       = ""
         var duration    = row.msDuration
@@ -222,6 +236,19 @@ object MediaStoreScanner {
             albumArtUri     = mediaStoreAlbumArtUri,
             mediaStoreAlbumArtUri = mediaStoreAlbumArtUri,
         )
+    }
+
+    internal fun decodeMediaStoreTrack(rawTrack: Int): Pair<Int, Int> {
+        if (rawTrack <= 0) return 0 to 0
+        if (rawTrack >= 1000) {
+            // Many libraries encode this as disc * 1000 + track.
+            val candidateDisc = rawTrack / 1000
+            val candidateTrack = rawTrack % 1000
+            if (candidateDisc in 1..99 && candidateTrack in 1..99) {
+                return candidateDisc to candidateTrack
+            }
+        }
+        return 0 to rawTrack
     }
 
     /**

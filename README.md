@@ -24,15 +24,25 @@ D-PAD Player is a lightweight, functional Android media player demo built with K
 
 - Android Studio / Android SDK
 - Command-line tools (`adb`)
-- Java 21 (for Gradle compilation)
+- Java 17 (for Gradle compilation)
 
 ### Build and Install
 
 To build the debug APK and install it directly to a connected USB debugging device, run the following command from the root of the project:
 
 ```bash
-./gradlew clean assembleDebug && adb install -r app/build/outputs/apk/debug/app-debug.apk
+./gradlew clean assembleDebug && adb install -r app/build/outputs/apk/debug/dpadmp3.apk
 ```
+
+### Build Release Artifacts (0.9)
+
+```bash
+./gradlew :app:testDebugUnitTest :app:lintRelease :app:bundleRelease
+```
+
+Release bundle output:
+
+`app/build/outputs/bundle/release/app-release.aab`
 
 ### Launching the App via CLI
 

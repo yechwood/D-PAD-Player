@@ -58,6 +58,9 @@ interface PlaylistDao {
     @Query("SELECT * FROM playlists ORDER BY name COLLATE NOCASE ASC")
     fun getAllPlaylists(): Flow<List<PlaylistEntity>>
 
+    @Query("SELECT * FROM playlists ORDER BY name COLLATE NOCASE ASC")
+    suspend fun getAllPlaylistsOnce(): List<PlaylistEntity>
+
     @Query("SELECT * FROM playlists WHERE id = :id")
     suspend fun getPlaylist(id: Long): PlaylistEntity?
 
@@ -122,6 +125,13 @@ data class TrackCacheEntity(
     val albumArtPath: String,
 )
 
+@Entity(tableName = "play_stats")
+data class PlayStatEntity(
+    @PrimaryKey val trackId: Long,
+    val playCount: Int,
+    val lastPlayedAt: Long,
+)
+
 @Dao
 interface TrackCacheDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -132,15 +142,41 @@ interface TrackCacheDao {
 
     @Query("SELECT * FROM track_cache")
     suspend fun getAll(): List<TrackCacheEntity>
+
+    @Query("SELECT * FROM track_cache WHERE sourceUri IN (:sourceUris)")
+    suspend fun getBySourceUris(sourceUris: List<String>): List<TrackCacheEntity>
+}
+
+@Dao
+interface PlayStatsDao {
+    @Query("SELECT * FROM play_stats")
+    fun observeAll(): Flow<List<PlayStatEntity>>
+
+    @Query("SELECT * FROM play_stats")
+    suspend fun getAll(): List<PlayStatEntity>
+
+    @Query("UPDATE play_stats SET playCount = playCount + 1, lastPlayedAt = :playedAt WHERE trackId = :trackId")
+    suspend fun incrementPlay(trackId: Long, playedAt: Long): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(stat: PlayStatEntity)
+
+    @Transaction
+    suspend fun recordPlay(trackId: Long, playedAt: Long) {
+        if (incrementPlay(trackId, playedAt) == 0) {
+            insert(PlayStatEntity(trackId = trackId, playCount = 1, lastPlayedAt = playedAt))
+        }
+    }
 }
 
 // ── Database ──────────────────────────────────────────────────────────────────
 
-@Database(entities = [PlaylistEntity::class, PlaylistSongEntity::class, AlbumCacheEntity::class, TrackCacheEntity::class], version = 3, exportSchema = true)
+@Database(entities = [PlaylistEntity::class, PlaylistSongEntity::class, AlbumCacheEntity::class, TrackCacheEntity::class, PlayStatEntity::class], version = 4, exportSchema = true)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun playlistDao(): PlaylistDao
     abstract fun albumCacheDao(): AlbumCacheDao
     abstract fun trackCacheDao(): TrackCacheDao
+    abstract fun playStatsDao(): PlayStatsDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -178,6 +214,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `play_stats` (`trackId` INTEGER NOT NULL, `playCount` INTEGER NOT NULL, `lastPlayedAt` INTEGER NOT NULL, PRIMARY KEY(`trackId`))"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: run {
@@ -185,7 +229,7 @@ abstract class AppDatabase : RoomDatabase() {
                         context.applicationContext,
                         AppDatabase::class.java,
                         "dpad_player.db"
-                    ).addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 
                     // Do NOT allow fallbackToDestructiveMigration here to avoid silent data loss in
                     // production. Migrations must be explicit (MIGRATION_1_2 is registered above).

@@ -8,11 +8,14 @@ import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.PopupMenu
 import android.widget.TextView
+import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.recyclerview.widget.RecyclerView
 import com.example.dpadplayer.db.PlaylistEntity
 import com.google.android.material.button.MaterialButton
+import kotlinx.coroutines.launch
+import androidx.lifecycle.lifecycleScope
 
 /**
  * Shows songs in a single playlist with rename/delete options.
@@ -29,6 +32,14 @@ class PlaylistDetailFragment : Fragment() {
 
     private val viewModel: MusicViewModel by activityViewModels()
     private var playlistId = -1L
+    private val importM3uLauncher =
+        registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) importM3u(uri)
+        }
+    private val exportM3uLauncher =
+        registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("audio/x-mpegurl")) { uri ->
+            if (uri != null) exportM3u(uri)
+        }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View =
         inflater.inflate(R.layout.fragment_playlist_detail, container, false)
@@ -95,10 +106,17 @@ class PlaylistDetailFragment : Fragment() {
             val popup = PopupMenu(requireContext(), btnMenu)
             popup.menu.add(0, 1, 0, "Rename")
             popup.menu.add(0, 2, 1, "Delete playlist")
+            popup.menu.add(0, 3, 2, "Import M3U")
+            popup.menu.add(0, 4, 3, "Export M3U")
             popup.setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     1 -> showRenameDialog()
                     2 -> confirmDelete()
+                    3 -> importM3uLauncher.launch(arrayOf("audio/x-mpegurl", "audio/mpegurl", "application/vnd.apple.mpegurl", "*/*"))
+                    4 -> {
+                        val suggested = (viewModel.playlists.value?.find { it.id == playlistId }?.name ?: "playlist") + ".m3u"
+                        exportM3uLauncher.launch(suggested)
+                    }
                 }
                 true
             }
@@ -108,14 +126,52 @@ class PlaylistDetailFragment : Fragment() {
             val popup = PopupMenu(requireContext(), anchor)
             popup.menu.add(0, 1, 0, "Rename")
             popup.menu.add(0, 2, 1, "Delete playlist")
+            popup.menu.add(0, 3, 2, "Import M3U")
+            popup.menu.add(0, 4, 3, "Export M3U")
             popup.setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     1 -> showRenameDialog()
                     2 -> confirmDelete()
+                    3 -> importM3uLauncher.launch(arrayOf("audio/x-mpegurl", "audio/mpegurl", "application/vnd.apple.mpegurl", "*/*"))
+                    4 -> {
+                        val suggested = (viewModel.playlists.value?.find { it.id == playlistId }?.name ?: "playlist") + ".m3u"
+                        exportM3uLauncher.launch(suggested)
+                    }
                 }
                 true
             }
             popup.show()
+        }
+    }
+
+    private fun importM3u(uri: android.net.Uri) {
+        val ctx = context ?: return
+        lifecycleScope.launch {
+            val content = PlaylistIo.readM3uFromUri(ctx, uri)
+            if (content.isNullOrBlank()) {
+                Toast.makeText(ctx, "Could not read M3U file", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val parsed = PlaylistIo.parseM3u(content)
+            val allTracks = viewModel.tracks.value ?: emptyList()
+            val resolved = PlaylistIo.resolveEntriesToTracks(parsed.entries, allTracks)
+            if (resolved.isEmpty()) {
+                Toast.makeText(ctx, "No matching local tracks found in M3U", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            viewModel.rewritePlaylist(playlistId, resolved)
+            Toast.makeText(ctx, "Imported ${resolved.size} tracks", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun exportM3u(uri: android.net.Uri) {
+        val ctx = context ?: return
+        lifecycleScope.launch {
+            val tracks = viewModel.resolvePlaylistTracks(playlistId)
+            val name = viewModel.playlists.value?.find { it.id == playlistId }?.name ?: "Playlist"
+            val content = PlaylistIo.buildM3uContent(name, tracks)
+            val ok = PlaylistIo.writeM3uToUri(ctx, uri, content)
+            Toast.makeText(ctx, if (ok) "Exported playlist" else "Export failed", Toast.LENGTH_SHORT).show()
         }
     }
 

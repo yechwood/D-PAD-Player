@@ -6,6 +6,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import android.widget.EditText
 import android.widget.TextView
 import com.bumptech.glide.Glide
 import androidx.core.content.ContextCompat
@@ -25,6 +26,7 @@ class LibraryFragment : Fragment() {
     private lateinit var viewPager: androidx.viewpager2.widget.ViewPager2
     private lateinit var tabLayout: com.google.android.material.tabs.TabLayout
     private lateinit var btnBack: MaterialButton
+    private lateinit var btnSearch: MaterialButton
     private lateinit var miniArt: ImageView
     private lateinit var miniTitle: TextView
     private lateinit var miniArtist: TextView
@@ -35,7 +37,7 @@ class LibraryFragment : Fragment() {
     private var restoringInitialTab = false
     private var requestedInitialTab = 0
 
-    private val tabTitles = listOf("Songs", "Albums", "Artists", "Genres", "Playlists", "Folders")
+    private val tabTitles = listOf("Songs", "Albums", "Artists", "Genres", "Playlists", "Folders", "Recent", "Top")
 
     companion object {
         private const val ARG_TAB = "tab"
@@ -54,6 +56,7 @@ class LibraryFragment : Fragment() {
         viewPager       = view.findViewById(R.id.view_pager)
         tabLayout       = view.findViewById(R.id.tab_layout)
         btnBack         = view.findViewById(R.id.btn_back)
+        btnSearch       = view.findViewById(R.id.btn_search)
         miniArt         = view.findViewById(R.id.mini_art)
         miniTitle       = view.findViewById(R.id.mini_title)
         miniArtist      = view.findViewById(R.id.mini_artist)
@@ -117,6 +120,12 @@ class LibraryFragment : Fragment() {
         applyPlayerControlFocusBackground(btnBack)
         btnBack.setupDpadItem(onFocusChanged = materialButtonFocusChangeHandler(btnBack)) {
             parentFragmentManager.popBackStack()
+        }
+
+        btnSearch.setOnClickListener { openSearchDialog() }
+        applyPlayerControlFocusBackground(btnSearch)
+        btnSearch.setupDpadItem(onFocusChanged = materialButtonFocusChangeHandler(btnSearch)) {
+            openSearchDialog()
         }
 
         // Mini-player: left area opens full player
@@ -244,20 +253,53 @@ class LibraryFragment : Fragment() {
         viewModel.currentIndex.observe(viewLifecycleOwner) { _ -> refreshMiniPlayer() }
         viewModel.isPlaying.observe(viewLifecycleOwner)   { playing -> updateMiniPlayIcon(playing) }
         viewModel.position.observe(viewLifecycleOwner)    { pos -> updateProgressBar(pos) }
+        viewModel.searchQuery.observe(viewLifecycleOwner) { query ->
+            val suffix = if (query.isBlank()) "" else " (${query.trim()})"
+            view?.findViewById<TextView>(R.id.tv_app_title)?.text = "DPad Player$suffix"
+        }
+    }
+
+    private fun openSearchDialog() {
+        val current = viewModel.searchQuery.value.orEmpty()
+        val input = EditText(requireContext()).apply {
+            setText(current)
+            setSelection(text.length)
+            hint = "Search songs, albums, artists..."
+        }
+        android.app.AlertDialog.Builder(requireContext())
+            .setTitle("Search library")
+            .setView(input)
+            .setPositiveButton("Apply") { _, _ ->
+                viewModel.setSearchQuery(input.text.toString())
+            }
+            .setNeutralButton("Clear") { _, _ ->
+                viewModel.setSearchQuery("")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun refreshMiniPlayer() {
         val activity = activity as? MainActivity ?: return
-        val track = activity.currentTrack() ?: return
+        val track = activity.currentTrack()
+        if (track == null) {
+            miniTitle.text = "No track playing"
+            miniArtist.text = ""
+            miniProgress.max = 1
+            miniProgress.progress = 0
+            miniArt.setImageResource(R.drawable.ic_music_note)
+            return
+        }
         miniTitle.text  = track.title
         miniArtist.text = track.artist
-        miniProgress.max = track.duration.toInt()
+        miniProgress.max = track.duration.coerceAtLeast(1L).toInt()
         Glide.with(this)
             .load(track.albumArtUri)
             .placeholder(R.drawable.ic_music_note)
             .error(R.drawable.ic_music_note)
             .fallback(R.drawable.ic_music_note)
             .into(miniArt)
+        updateProgressBar(viewModel.position.value ?: 0L)
     }
 
     private fun updateMiniPlayIcon(isPlaying: Boolean) {
@@ -266,6 +308,8 @@ class LibraryFragment : Fragment() {
     }
 
     private fun updateProgressBar(pos: Long) {
-        miniProgress.progress = pos.toInt()
+        val max = miniProgress.max.coerceAtLeast(1)
+        val clamped = pos.coerceIn(0L, max.toLong())
+        miniProgress.progress = clamped.toInt()
     }
 }

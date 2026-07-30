@@ -14,6 +14,7 @@ import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.preference.PreferenceManager
 import com.google.android.material.button.MaterialButton
+import kotlin.math.roundToInt
 
 /**
  * Full now-playing screen.
@@ -27,6 +28,7 @@ class PlayerFragment : Fragment() {
     private lateinit var btnBack: MaterialButton
     private lateinit var btnQueue: MaterialButton
     private lateinit var tvTrackCounter: TextView
+    private lateinit var tvSleepTimerStatus: TextView
     private lateinit var albumArt: ImageView
     private lateinit var tvTitle: TextView
     private lateinit var tvArtist: TextView
@@ -39,6 +41,9 @@ class PlayerFragment : Fragment() {
     private lateinit var btnPlay: MaterialButton
     private lateinit var btnNext: MaterialButton
     private lateinit var btnForward: MaterialButton
+    private lateinit var btnSleepTimer: MaterialButton
+    private lateinit var btnSpeed: MaterialButton
+    private lateinit var btnEqualizer: MaterialButton
 
     private var seekBarDragging = false
 
@@ -52,6 +57,7 @@ class PlayerFragment : Fragment() {
         btnBack        = view.findViewById(R.id.btn_back)
         btnQueue       = view.findViewById(R.id.btn_queue)
         tvTrackCounter = view.findViewById(R.id.tv_track_counter)
+        tvSleepTimerStatus = view.findViewById(R.id.tv_sleep_timer_status)
         albumArt       = view.findViewById(R.id.album_art)
         tvTitle        = view.findViewById(R.id.tv_title)
         tvArtist       = view.findViewById(R.id.tv_artist)
@@ -64,6 +70,9 @@ class PlayerFragment : Fragment() {
         btnPlay        = view.findViewById(R.id.btn_play)
         btnNext        = view.findViewById(R.id.btn_next)
         btnForward     = view.findViewById(R.id.btn_forward)
+        btnSleepTimer  = view.findViewById(R.id.btn_sleep_timer)
+        btnSpeed       = view.findViewById(R.id.btn_speed)
+        btnEqualizer   = view.findViewById(R.id.btn_equalizer)
 
         btnBack.setOnClickListener { navigateBack() }
         applyPlayerControlFocusBackground(btnBack)
@@ -80,9 +89,10 @@ class PlayerFragment : Fragment() {
         setupSeekBar()
         observeViewModel()
         updateForwardSkipDescription()
+        refreshSleepTimerStatus((activity as? MainActivity)?.sleepTimerRemainingMs() ?: -1L)
 
         // Apply focus styling to all transport buttons
-        listOf(btnRepeat, btnPrev, btnPlay, btnNext, btnForward).forEach { btn ->
+        listOf(btnRepeat, btnPrev, btnPlay, btnNext, btnForward, btnSleepTimer, btnSpeed, btnEqualizer).forEach { btn ->
             applyPlayerControlFocusBackground(btn)
             btn.setupDpadItem(onFocusChanged = materialButtonFocusChangeHandler(btn)) {
                 btn.performClick()
@@ -111,6 +121,9 @@ class PlayerFragment : Fragment() {
         btnNext.setOnClickListener    { (activity as? MainActivity)?.sendCmd("NEXT") }
         btnRepeat.setOnClickListener  { (activity as? MainActivity)?.cycleRepeat() }
         btnForward.setOnClickListener { (activity as? MainActivity)?.sendCmd("SEEK_FWD") }
+        btnSleepTimer.setOnClickListener { showSleepTimerDialog() }
+        btnSpeed.setOnClickListener { showPlaybackSpeedDialog() }
+        btnEqualizer.setOnClickListener { (activity as? MainActivity)?.openEqualizer() }
     }
 
     // ── SeekBar — touch dragging + D-pad scrubbing ────────────────────────────
@@ -170,6 +183,9 @@ class PlayerFragment : Fragment() {
         viewModel.repeatMode.observe(viewLifecycleOwner) { mode ->
             updateRepeatIcon(mode)
         }
+        viewModel.sleepTimerRemainingMs.observe(viewLifecycleOwner) { remaining ->
+            refreshSleepTimerStatus(remaining)
+        }
     }
 
     // ── UI refresh ────────────────────────────────────────────────────────────
@@ -221,6 +237,46 @@ class PlayerFragment : Fragment() {
         val total = viewModel.queue.value?.size ?: 0
         val idx   = viewModel.currentIndex.value ?: -1
         tvTrackCounter.text = if (total > 0 && idx >= 0) "${idx + 1} / $total" else ""
+    }
+
+    private fun showPlaybackSpeedDialog() {
+        val activity = activity as? MainActivity ?: return
+        val options = arrayOf("0.75x", "1.00x", "1.25x", "1.50x")
+        val values = floatArrayOf(0.75f, 1.0f, 1.25f, 1.5f)
+        val current = activity.playbackSpeed()
+        val selected = values.indices.minByOrNull { kotlin.math.abs(values[it] - current) } ?: 1
+        android.app.AlertDialog.Builder(requireContext())
+            .setTitle("Playback speed")
+            .setSingleChoiceItems(options, selected) { dialog, which ->
+                activity.setPlaybackSpeed(values[which])
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showSleepTimerDialog() {
+        val activity = activity as? MainActivity ?: return
+        val options = arrayOf("Off", "15 minutes", "30 minutes", "45 minutes", "60 minutes")
+        val values = longArrayOf(0L, 15L * 60_000L, 30L * 60_000L, 45L * 60_000L, 60L * 60_000L)
+        android.app.AlertDialog.Builder(requireContext())
+            .setTitle("Sleep timer")
+            .setItems(options) { _, which ->
+                val value = values[which]
+                if (value <= 0L) activity.cancelSleepTimer() else activity.startSleepTimer(value)
+            }
+            .show()
+    }
+
+    private fun refreshSleepTimerStatus(remainingMs: Long) {
+        if (remainingMs <= 0L) {
+            tvSleepTimerStatus.text = ""
+            return
+        }
+        val totalSeconds = (remainingMs / 1000L).coerceAtLeast(0L)
+        val minutes = totalSeconds / 60L
+        val seconds = totalSeconds % 60L
+        tvSleepTimerStatus.text = "Sleep %d:%02d".format(minutes, seconds)
     }
 
     private fun configuredSeekStepMs(): Long {

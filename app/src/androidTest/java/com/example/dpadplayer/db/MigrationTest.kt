@@ -38,7 +38,7 @@ class MigrationTest {
             InstrumentationRegistry.getInstrumentation().targetContext,
             AppDatabase::class.java,
             dbName
-        ).addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
+        ).addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
             .build()
 
         migratedDb.openHelper.writableDatabase.close()
@@ -58,7 +58,26 @@ class MigrationTest {
             InstrumentationRegistry.getInstrumentation().targetContext,
             AppDatabase::class.java,
             dbName
-        ).addMigrations(AppDatabase.MIGRATION_2_3)
+        ).addMigrations(AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
+            .build()
+
+        migratedDb.openHelper.writableDatabase.close()
+        migratedDb.close()
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate3To4() {
+        val dbName = "migration-test-v3-v4"
+        helper.createDatabase(dbName, 3).apply {
+            close()
+        }
+
+        val migratedDb = Room.databaseBuilder(
+            InstrumentationRegistry.getInstrumentation().targetContext,
+            AppDatabase::class.java,
+            dbName
+        ).addMigrations(AppDatabase.MIGRATION_3_4)
             .build()
 
         migratedDb.openHelper.writableDatabase.close()

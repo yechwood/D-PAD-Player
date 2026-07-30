@@ -7,6 +7,7 @@ import android.net.Uri
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import com.example.dpadplayer.PlaylistIo
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -71,5 +72,87 @@ class MusicLibraryTest {
         // Song counts should sum to total tracks
         val totalSongs = lib.artists.sumOf { it.songs.size }
         assertTrue(totalSongs >= 2)
+    }
+
+    @Test
+    fun testAlbumSongsPreferTrackNumberOverTitleSort() {
+        val t1 = makeTrack(1, "Track B", "Artist", "AlbumX", 10, trackNumber = 2)
+        val t2 = makeTrack(2, "Track A", "Artist", "AlbumX", 10, trackNumber = 1)
+
+        val lib = MusicLibrary.build(listOf(t1, t2))
+        val songs = lib.albums.first().songs
+
+        assertEquals(2, songs.size)
+        assertEquals(1, songs[0].trackNumber)
+        assertEquals(2, songs[1].trackNumber)
+    }
+
+    @Test
+    fun testDecodeMediaStoreTrackHandlesPackedAndSimpleValues() {
+        assertEquals(1 to 5, MediaStoreScanner.decodeMediaStoreTrack(1005))
+        assertEquals(0 to 7, MediaStoreScanner.decodeMediaStoreTrack(7))
+        assertEquals(0 to 0, MediaStoreScanner.decodeMediaStoreTrack(0))
+    }
+
+    @Test
+    fun testFilterTracksMatchesTitleArtistAndAlbum() {
+        val t1 = makeTrack(1, "Dreamscape", "Aurora", "Night Sky", 11)
+        val t2 = makeTrack(2, "Pulse", "Synth Unit", "Neon City", 12)
+
+        val byTitle = MusicViewModel.filterTracks(listOf(t1, t2), "dream")
+        assertEquals(listOf(t1), byTitle)
+
+        val byArtist = MusicViewModel.filterTracks(listOf(t1, t2), "synth")
+        assertEquals(listOf(t2), byArtist)
+
+        val byAlbum = MusicViewModel.filterTracks(listOf(t1, t2), "night")
+        assertEquals(listOf(t1), byAlbum)
+    }
+
+    @Test
+    fun testFilterAlbumsMatchesSongsInsideAlbum() {
+        val song = makeTrack(1, "Moonlight", "Piano Artist", "Quiet Hours", 33)
+        val album = Album(
+            id = "quiet",
+            name = "Quiet Hours",
+            sortName = "Quiet Hours",
+            artist = "Various",
+            year = 2024,
+            songs = listOf(song),
+            albumArtUri = Uri.parse("content://art/quiet")
+        )
+
+        val filtered = MusicViewModel.filterAlbums(listOf(album), "moon")
+        assertEquals(1, filtered.size)
+        assertEquals(album.id, filtered.first().id)
+    }
+
+    @Test
+    fun testParseM3uReadsEntriesAndPlaylistTitle() {
+        val m3u = """
+            #EXTM3U
+            #PLAYLIST:Road Trip
+            #EXTINF:210,Artist - Song One
+            /music/song1.mp3
+            #EXTINF:180,Artist - Song Two
+            /music/song2.mp3
+        """.trimIndent()
+
+        val parsed = PlaylistIo.parseM3u(m3u)
+        assertEquals("Road Trip", parsed.title)
+        assertEquals(listOf("/music/song1.mp3", "/music/song2.mp3"), parsed.entries)
+    }
+
+    @Test
+    fun testResolveM3uEntriesMatchesByPathAndFilename() {
+        val t1 = makeTrack(1, "One", "Artist", "Album", 1, filePath = "/storage/music/song1.mp3")
+        val t2 = makeTrack(2, "Two", "Artist", "Album", 1, filePath = "/storage/music/song2.mp3")
+
+        val resolved = PlaylistIo.resolveEntriesToTracks(
+            listOf("/storage/music/song1.mp3", "song2.mp3"),
+            listOf(t1, t2)
+        )
+
+        assertEquals(listOf(t1, t2), resolved)
     }
 }
