@@ -30,5 +30,12 @@ jobs:
       - name: Unit Tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon --console=plain
 
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dpad-vn220-android6
+          path: app/build/outputs/apk/debug/dpadmp3.apk
+          if-no-files-found: error
+
       - name: AndroidTest Compile Check
         run: ./gradlew :app:compileDebugAndroidTestKotlin --no-daemon --console=plain
