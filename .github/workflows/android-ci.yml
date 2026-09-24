@@ -2,7 +2,7 @@ name: Android CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "fix/lg-vn220-android6" ]
   pull_request:
     branches: [ "main" ]
 
