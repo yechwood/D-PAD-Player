@@ -88,8 +88,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        // Do not start the foreground playback service merely by opening the app.
+        // This avoids an unnecessary service/notification startup on the LG VN220.
         Intent(this, PlaybackService::class.java).also { intent ->
-            ContextCompat.startForegroundService(this, intent)
             bindService(intent, connection, BIND_AUTO_CREATE)
         }
     }

@@ -6,7 +6,6 @@ plugins {
 
 import java.util.Properties
 
-// Pass schema location to Room compiler so schema JSONs are exported for migration tests
 kapt {
     arguments {
         arg("room.schemaLocation", "${projectDir}/schemas")
@@ -19,11 +18,11 @@ android {
 
     defaultConfig {
         applicationId "com.example.dpadplayer"
-        minSdk 21
-        targetSdk 34
+        minSdk 23
+        targetSdk 25
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        versionCode 9
-        versionName "0.9"
+        versionCode 10
+        versionName "0.9-vn220"
     }
 
     compileOptions {
@@ -31,18 +30,11 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = '17'
-    }
+    kotlinOptions { jvmTarget = '17' }
 
-    // ensure Room can export schemas for migration testing
-    buildFeatures {
-        // no other features needed here; placeholder to keep Gradle happy if extended
-    }
+    buildFeatures { }
 
-    lint {
-        abortOnError false
-    }
+    lint { abortOnError false }
 
     def signingProps = new Properties()
     def signingPropsFile = rootProject.file("signing.local.properties")
@@ -71,16 +63,12 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            if (hasReleaseSigning) {
-                signingConfig signingConfigs.release
-            }
+            if (hasReleaseSigning) { signingConfig signingConfigs.release }
         }
     }
 
     applicationVariants.all { variant ->
-        variant.outputs.all {
-            outputFileName = "dpadmp3.apk"
-        }
+        variant.outputs.all { outputFileName = "dpadmp3.apk" }
     }
 }
 
@@ -89,45 +77,24 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.9.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-
-    // ExoPlayer for playback
     implementation 'com.google.android.exoplayer:exoplayer:2.19.1'
-
-    // lifecycle
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.1'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.1'
     implementation 'androidx.lifecycle:lifecycle-livedata-ktx:2.6.1'
     implementation 'androidx.activity:activity-ktx:1.7.2'
     implementation 'androidx.fragment:fragment-ktx:1.6.1'
-
-    // media and notification
     implementation 'androidx.media:media:1.6.0'
-
-    // settings / preferences
     implementation 'androidx.preference:preference-ktx:1.2.1'
-
-    // ViewPager2 + tab navigation
     implementation 'androidx.viewpager2:viewpager2:1.0.0'
-
-    // Room (playlists + metadata cache)
     implementation 'androidx.room:room-runtime:2.6.1'
     implementation 'androidx.room:room-ktx:2.6.1'
     kapt 'androidx.room:room-compiler:2.6.1'
-
-    // Glide for image loading
     implementation 'com.github.bumptech.glide:glide:4.14.2'
     kapt 'com.github.bumptech.glide:compiler:4.14.2'
-    
-    // Jaudiotagger for accurate ID3 / FLAC metadata
     implementation 'net.jthink:jaudiotagger:3.0.1'
-
-    // Unit testing
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.1'
-    // Robolectric to provide android.* classes in unit tests
     testImplementation 'org.robolectric:robolectric:4.10.3'
-
-    // Room testing for migration tests
     androidTestImplementation 'androidx.room:room-testing:2.6.1'
     androidTestImplementation 'androidx.test:runner:1.5.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
