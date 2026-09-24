@@ -1,63 +1,19 @@
 # D-PAD Player 🎵
 
-D-PAD Player is a lightweight, functional Android media player demo built with Kotlin and ExoPlayer. It demonstrates how to build a modern local media playback app with background service support, media session integration, and battery-optimized notification controls.
+D-PAD Player is a lightweight, functional Android media player demo built with Kotlin and ExoPlayer.
 
-## Screenshots
+## LG Exalt VN220 compatibility
 
-<p float="left">
-  <img src="./screen1.png" width="250" />
-  <img src="./screen2.png" width="250" />
-  <img src="./screen3.png" width="250" />
-</p>
+The current branch contains the Android 6.0 compatibility work for the LG Exalt LTE VN220, including a lower target SDK and removal of newer foreground-service manifest requirements that are not applicable to Android 6.
 
-## Features
+Builds are produced by the GitHub Actions Android CI workflow.
 
-- **Local Media Playback**: Scans and plays local audio files from the device.
-- **Background Playback**: Utilizes a Foreground Service to keep music playing when the app is minimized.
-- **Media Session Integration**: Fully integrates with Android's MediaSession, providing lock screen controls and Bluetooth media button support.
-- **Battery Optimized**: Intelligently detaches the foreground service when music is paused, allowing the system to reclaim resources and users to easily swipe away the notification.
-- **Modern UI**: Clean, responsive user interface.
-
-## Getting Started
-
-### Prerequisites
-
-- Android Studio / Android SDK
-- Command-line tools (`adb`)
-- Java 17 (for Gradle compilation)
-
-### Build and Install
-
-To build the debug APK and install it directly to a connected USB debugging device, run the following command from the root of the project:
+## Build and Install
 
 ```bash
-./gradlew clean assembleDebug && adb install -r app/build/outputs/apk/debug/dpadmp3.apk
+./gradlew clean assembleDebug
 ```
 
-### Build Release Artifacts (0.9)
+APK output:
 
-```bash
-./gradlew :app:testDebugUnitTest :app:lintRelease :app:bundleRelease
-```
-
-Release bundle output:
-
-`app/build/outputs/bundle/release/app-release.aab`
-
-### Launching the App via CLI
-
-Once installed, you can launch the app directly from your terminal:
-
-```bash
-adb shell am start -n com.example.dpadplayer/.MainActivity
-```
-
-## Development Notes
-
-- **Architecture**: The app is located in the `app/` module and uses a standard Android Gradle build system (Gradle 8.9).
-- **Icons**: Uses adaptive icons (XML vectors) for crisp rendering on all Android versions.
-- **Dependencies**: Built primarily with AndroidX libraries and ExoPlayer.
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
+`app/build/outputs/apk/debug/dpadmp3.apk`
