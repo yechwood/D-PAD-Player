@@ -18,3 +18,4 @@ APK output:
 
 `app/build/outputs/apk/debug/dpadmp3.apk`
 
+<!-- CI trigger check -->
